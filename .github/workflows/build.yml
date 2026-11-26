@@ -1,0 +1,165 @@
+name: build
+
+# Builds on every PR and push. Publishes to ghcr on push (main, v* tags) and on
+# manual runs that release or rebuild. A push to main that merges a bump PR, or
+# a manual run with release != none, also tags the next version.
+
+on:
+  pull_request:
+    paths-ignore: [docs/**, "**/*.md"]
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths-ignore: [docs/**, "**/*.md"]
+  workflow_dispatch:
+    inputs:
+      release:
+        description: Tag a release from this build
+        type: choice
+        options: [none, patch, minor, major]
+        default: none
+      rebuild:
+        description: Pull the base image and refresh apt packages
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  shellcheck:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: changed shell files
+        id: changed
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          shopt -s globstar nullglob
+          files=(docker/install/*.sh docker/*.sh docker/bin/* docker/bashrc docker/bash_profile scripts/**/*.sh)
+          # no usable base on dispatch, new branches and tags: check everything
+          if [[ -n "$BASE" && "$BASE" != 0000000000000000000000000000000000000000 ]] &&
+            git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            changed="$(git diff --name-only "$BASE" HEAD)"
+            hit=false
+            for f in "${files[@]}"; do
+              grep -qxF "$f" <<<"$changed" && hit=true && break
+            done
+          else
+            hit=true
+          fi
+          [[ ${#files[@]} -gt 0 ]] || hit=false
+          echo "run=$hit" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "${files[@]}" > "$RUNNER_TEMP/shellfiles"
+
+      - name: shellcheck
+        if: steps.changed.outputs.run == 'true'
+        run: xargs -d '\n' shellcheck -x < "$RUNNER_TEMP/shellfiles"
+
+  build:
+    runs-on: ubuntu-latest
+    env:
+      PUBLISH: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.release != 'none' || inputs.rebuild)) }}
+      # fork PRs get a read-only token
+      CAN_WRITE: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+      REBUILD: ${{ github.event_name == 'workflow_dispatch' && inputs.rebuild }}
+      RELEASE: >-
+        ${{ github.event_name == 'workflow_dispatch' && inputs.release
+         || (github.event_name == 'push' && github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, 'bump pinned versions') && 'patch')
+         || 'none' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: image tags
+        id: tags
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          tags=("$image:sha-${GITHUB_SHA::7}")
+          next=""
+          # latest follows main only; a hand-pushed tag must not move it
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            tags+=("$image:$GITHUB_REF_NAME")
+          elif [[ "$GITHUB_REF" == refs/heads/main ]]; then
+            tags+=("$image:latest")
+          fi
+          if [[ "$RELEASE" != none ]]; then
+            latest="$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname |
+              grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n1 || true)"
+            latest="${latest:-v0.0.0}"
+            IFS=. read -r major minor patch <<<"${latest#v}"
+            case "$RELEASE" in
+              major) next="v$((major + 1)).0.0" ;;
+              minor) next="v$major.$((minor + 1)).0" ;;
+              patch) next="v$major.$minor.$((patch + 1))" ;;
+            esac
+            tags+=("$image:$next")
+            echo "Release: $latest -> $next" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          epoch=""
+          [[ "$REBUILD" == true ]] && epoch="$(date -u +%F)"
+          {
+            echo "image=$image"
+            printf 'tags=%s\n' "$(IFS=,; echo "${tags[*]}")"
+            echo "next=$next"
+            echo "epoch=$epoch"
+          } >> "$GITHUB_OUTPUT"
+          printf 'Tags: %s\n' "${tags[*]}" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: login to ghcr
+        if: env.CAN_WRITE == 'true'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: build
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          push: ${{ env.PUBLISH == 'true' }}
+          pull: ${{ env.REBUILD == 'true' }}
+          tags: ${{ steps.tags.outputs.tags }}
+          build-args: |
+            APT_EPOCH=${{ steps.tags.outputs.epoch }}
+          cache-from: type=registry,ref=${{ steps.tags.outputs.image }}:buildcache
+          cache-to: ${{ env.CAN_WRITE == 'true' && format('type=registry,ref={0}:buildcache,mode=max', steps.tags.outputs.image) || '' }}
+
+      - name: image size
+        if: env.PUBLISH == 'true'
+        env:
+          REF: ${{ steps.tags.outputs.image }}@${{ steps.build.outputs.digest }}
+        run: |
+          # the pushed ref is an index (image + attestation); sum the amd64 layers
+          raw="$(docker buildx imagetools inspect --raw "$REF")"
+          digest="$(jq -r '.manifests[]? | select(.platform.os == "linux" and .platform.architecture == "amd64") | .digest' <<<"$raw")"
+          [[ -n "$digest" ]] && raw="$(docker buildx imagetools inspect --raw "${REF%@*}@$digest")"
+          bytes="$(jq '[.layers[].size] | add' <<<"$raw")"
+          echo "Image size (compressed): $(numfmt --to=iec --suffix=B "$bytes") ($bytes bytes)" >> "$GITHUB_STEP_SUMMARY"
+
+      # Pushed with GITHUB_TOKEN, so it triggers nothing. The image is already up.
+      - name: tag release
+        if: env.PUBLISH == 'true' && steps.tags.outputs.next != ''
+        env:
+          NEXT: ${{ steps.tags.outputs.next }}
+        run: |
+          git tag "$NEXT"
+          git push origin "$NEXT"
