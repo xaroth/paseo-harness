@@ -6,5 +6,10 @@ mkdir -p "$dir"
 curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" \
   | tar -xJ -C "$dir" --strip-components=1 --no-same-owner
 ln -s "v${NODE_VERSION}/installation" /opt/node/current
-PATH="/opt/node/current/bin:$PATH" corepack enable
-/opt/node/current/bin/node --version
+# Node 25+ no longer bundles corepack
+export PATH="/opt/node/current/bin:$PATH" NPM_CONFIG_CACHE=/tmp/npm-cache
+npm install -g --no-fund --no-audit corepack
+corepack enable
+rm -rf /tmp/npm-cache /root/.npm
+node --version
+corepack --version
