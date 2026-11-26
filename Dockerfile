@@ -3,7 +3,7 @@
 # to one script only rebuilds that layer. Pins below are bumped by CI.
 FROM debian:trixie-slim
 
-ARG NODE_VERSION=24.22.3
+ARG NODE_VERSION=26.13.1
 ARG GO_VERSION=1.27.4
 ARG RUST_VERSION=1.100.0
 ARG CLOUDFLARED_VERSION=2026.11.2
