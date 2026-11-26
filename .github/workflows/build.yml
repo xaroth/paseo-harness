@@ -109,8 +109,8 @@ jobs:
             tags+=("$image:$next")
             echo "Release: $latest -> $next" >> "$GITHUB_STEP_SUMMARY"
           fi
-          epoch=""
-          [[ "$REBUILD" == true ]] && epoch="$(date -u +%F)"
+          # stable within an ISO week so normal builds keep the apt cache
+          epoch="$(date -u +%G-W%V)"
           {
             echo "image=$image"
             printf 'tags=%s\n' "$(IFS=,; echo "${tags[*]}")"

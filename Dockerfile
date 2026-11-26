@@ -1,33 +1,33 @@
 # syntax=docker/dockerfile:1
 # Each install step is a script under docker/install/, bind-mounted so a change
-# to one script only rebuilds that layer. Pins below are bumped by CI.
+# to one script only rebuilds that layer. Pins are bumped by CI.
+# Pins sit next to their layer so a bump only rebuilds from that layer.
 FROM debian:trixie-slim
-
-ARG NODE_VERSION=26.13.1
-ARG GO_VERSION=1.27.4
-ARG RUST_VERSION=1.100.0
-ARG CLOUDFLARED_VERSION=2026.11.2
-ARG JJ_VERSION=0.47.1
-ARG FLATC_VERSION=25.12.19
-ARG FNM_VERSION=1.39.0
-ARG UV_VERSION=0.13.10
-ARG GH_MIN_VERSION=2.81.0
-# set to a date to bust the apt layer cache on scheduled rebuilds
-ARG APT_EPOCH
 
 ENV DEBIAN_FRONTEND=noninteractive
 
+# changes weekly to refresh apt packages
+ARG APT_EPOCH
 RUN --mount=type=bind,source=docker/install/apt.sh,target=/tmp/i.sh \
     --mount=type=bind,source=docker/apt-packages.txt,target=/tmp/apt-packages.txt \
     echo "apt epoch: ${APT_EPOCH:-none}" && /tmp/i.sh
+ARG GH_MIN_VERSION=2.81.0
 RUN --mount=type=bind,source=docker/install/gh.sh,target=/tmp/i.sh /tmp/i.sh
+ARG NODE_VERSION=26.13.1
 RUN --mount=type=bind,source=docker/install/node.sh,target=/tmp/i.sh /tmp/i.sh
+ARG CLOUDFLARED_VERSION=2026.11.2
 RUN --mount=type=bind,source=docker/install/cloudflared.sh,target=/tmp/i.sh /tmp/i.sh
+ARG GO_VERSION=1.27.4
 RUN --mount=type=bind,source=docker/install/go.sh,target=/tmp/i.sh /tmp/i.sh
+ARG RUST_VERSION=1.100.0
 RUN --mount=type=bind,source=docker/install/rust.sh,target=/tmp/i.sh /tmp/i.sh
+ARG UV_VERSION=0.13.10
 RUN --mount=type=bind,source=docker/install/uv.sh,target=/tmp/i.sh /tmp/i.sh
+ARG JJ_VERSION=0.47.1
 RUN --mount=type=bind,source=docker/install/jj.sh,target=/tmp/i.sh /tmp/i.sh
+ARG FLATC_VERSION=25.12.19
 RUN --mount=type=bind,source=docker/install/flatc.sh,target=/tmp/i.sh /tmp/i.sh
+ARG FNM_VERSION=1.39.0
 RUN --mount=type=bind,source=docker/install/fnm.sh,target=/tmp/i.sh /tmp/i.sh
 RUN --mount=type=bind,source=docker/install/user.sh,target=/tmp/i.sh /tmp/i.sh
 
