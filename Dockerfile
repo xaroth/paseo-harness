@@ -30,6 +30,22 @@ RUN --mount=type=bind,source=docker/install/flatc.sh,target=/tmp/i.sh /tmp/i.sh
 ARG FNM_VERSION=1.39.0
 RUN --mount=type=bind,source=docker/install/fnm.sh,target=/tmp/i.sh /tmp/i.sh
 RUN --mount=type=bind,source=docker/install/user.sh,target=/tmp/i.sh /tmp/i.sh
+ARG CHROME_DEVTOOLS_MCP_VERSION=1.14.0
+RUN --mount=type=bind,source=docker/install/tool.sh,target=/tmp/install/tool.sh \
+    --mount=type=bind,source=docker/lib/tools.sh,target=/tmp/lib/tools.sh \
+    /tmp/install/tool.sh chrome-devtools-mcp
+ARG PLAYWRIGHT_MCP_VERSION=0.0.86
+RUN --mount=type=bind,source=docker/install/tool.sh,target=/tmp/install/tool.sh \
+    --mount=type=bind,source=docker/lib/tools.sh,target=/tmp/lib/tools.sh \
+    /tmp/install/tool.sh playwright-mcp
+ARG PASEO_VERSION=0.17.5
+RUN --mount=type=bind,source=docker/install/tool.sh,target=/tmp/install/tool.sh \
+    --mount=type=bind,source=docker/lib/tools.sh,target=/tmp/lib/tools.sh \
+    /tmp/install/tool.sh paseo
+ARG CLAUDE_CODE_VERSION=2.1.332
+RUN --mount=type=bind,source=docker/install/tool.sh,target=/tmp/install/tool.sh \
+    --mount=type=bind,source=docker/lib/tools.sh,target=/tmp/lib/tools.sh \
+    /tmp/install/tool.sh claude
 
 COPY --chown=code:code docker/bashrc /home/code/.bashrc
 COPY --chown=code:code docker/bash_profile /home/code/.bash_profile
