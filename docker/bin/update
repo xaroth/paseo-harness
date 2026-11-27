@@ -145,7 +145,7 @@ verify() {
   local tool="$1" dir="$2" tmp out rc
   if [ "$tool" = paseo ]; then verify_paseo "$dir"; return; fi
   tmp="$(mktemp -d)"
-  out="$(CLAUDE_CONFIG_DIR="$tmp" timeout "$VERIFY_TIMEOUT" "$dir/bin/${TOOL_BIN[$tool]}" --version 2>&1 9>&-)"
+  out="$(tool_install_env; CLAUDE_CONFIG_DIR="$tmp" timeout "$VERIFY_TIMEOUT" "$dir/bin/${TOOL_BIN[$tool]}" --version 2>&1 9>&-)"
   rc=$?
   rm -rf "$tmp"
   ((rc == 0)) || echo "$out" | tail -n 5

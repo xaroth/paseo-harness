@@ -42,10 +42,11 @@ tool_arg_var() { echo "${TOOL_ARG[$1]}"; }
 # tool_pkg_dir <root> <tool>: package dir of the active version under <root>
 tool_pkg_dir() { echo "$1/$2/current/lib/node_modules/${TOOL_PKG[$2]}"; }
 
-# install env: skip browser downloads, keep claude from writing real config or self-updating
+# install env: skip browser downloads, keep claude from writing real config or self-updating.
+# chrome-devtools-mcp --version otherwise leaves a detached update check writing to the npm cache.
 tool_install_env() {
   export PUPPETEER_SKIP_DOWNLOAD=1 PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 DISABLE_AUTOUPDATER=1 \
-    NPM_CONFIG_UPDATE_NOTIFIER=false
+    NPM_CONFIG_UPDATE_NOTIFIER=false CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS=1
 }
 
 # per-tool dead weight, globs relative to the install dir
