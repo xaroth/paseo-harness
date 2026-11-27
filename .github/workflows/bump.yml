@@ -23,7 +23,7 @@ jobs:
         id: app
         uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ vars.APP_ID }}
+          client-id: ${{ vars.APP_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
       - name: bump versions
@@ -51,6 +51,7 @@ jobs:
             Merging tags the next patch release.
 
       - name: weekly rebuild
+        if: ${{ !cancelled() }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh workflow run build.yml --repo "$GITHUB_REPOSITORY" --ref main -f rebuild=true
