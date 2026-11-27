@@ -57,7 +57,7 @@ tool_npm_install() {
   npm install -g --prefix "$dir" --no-fund --no-audit --dangerously-allow-all-scripts "$@" "${TOOL_PKG[$tool]}@${ver}"
   while read -r p; do
     # shellcheck disable=SC2086 # glob on purpose
-    [[ -n "$p" ]] && rm -rf "$dir"/$p
+    [[ -n "$p" ]] && rm -rf "${dir:?}"/$p
   done < <(tool_strip_paths "$tool")
   # source maps and other platforms' prebuilds are dead weight
   find "$dir" -name '*.map' -type f -delete
