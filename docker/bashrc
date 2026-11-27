@@ -7,6 +7,10 @@ if command -v fnm >/dev/null; then
   eval "$(fnm env --use-on-cd --shell bash)"
 fi
 
+# PASEO_PASSWORD for paseo CLI calls, written by the entrypoint (0600)
+# shellcheck source=/dev/null
+[ -r /run/harness/env ] && . /run/harness/env
+
 for f in /config/shell/bashrc.d/*.sh; do
   # shellcheck source=/dev/null
   [ -r "$f" ] && . "$f"

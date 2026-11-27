@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+# Supervises `paseo daemon run`. Restarts at once when `update` leaves the
+# restart marker, retries crashes after 5 s. After 5 crashes in 300 s on the
+# overlay Paseo it falls back to the image Paseo; on the image one it exits 1
+# so Docker restarts the container.
+set -uo pipefail
+# shellcheck source=docker/lib/tools.sh
+source "$(dirname "$(readlink -f "$0")")/../lib/tools.sh"
+
+RUN_DIR="${HARNESS_RUN_DIR:-/run/harness}"
+NODE=/opt/node/current/bin/node
+CRASH_LIMIT=5
+CRASH_WINDOW=300
+
+log() { printf '[harness-run] %s\n' "$*" >&2; }
+
+stopping=0
+daemon_pid=
+watch_pid=
+image_only=0
+
+on_signal() {
+  stopping=1
+  [ -n "$daemon_pid" ] && kill -TERM "$daemon_pid" 2>/dev/null
+  [ -n "$watch_pid" ] && kill -TERM "$watch_pid" 2>/dev/null
+  return 0
+}
+trap on_signal TERM INT
+
+# overlay first, then the image baseline
+paseo_entry() {
+  local root dir bin roots=("$TOOLS_OVERLAY_ROOT" "$TOOLS_IMAGE_ROOT")
+  [ "$image_only" = 1 ] && roots=("$TOOLS_IMAGE_ROOT")
+  for root in "${roots[@]}"; do
+    dir="$(tool_pkg_dir "$root" paseo)"
+    [ -f "$dir/package.json" ] || continue
+    bin="$(jq -r --arg b "${TOOL_BIN[paseo]}" \
+      '.bin | if type == "string" then . else .[$b] end // empty' "$dir/package.json")"
+    if [ -n "$bin" ] && [ -f "$dir/$bin" ]; then
+      echo "$dir/$bin"
+      return 0
+    fi
+  done
+  return 1
+}
+
+finish() {
+  if [ -n "$watch_pid" ]; then
+    kill -TERM "$watch_pid" 2>/dev/null
+    wait "$watch_pid" 2>/dev/null
+  fi
+  exit "$1"
+}
+
+mkdir -p "$RUN_DIR"
+if command -v update >/dev/null; then
+  update --watch &
+  watch_pid=$!
+fi
+
+crashes=()
+while :; do
+  if ! entry="$(paseo_entry)"; then
+    log "paseo not found in $TOOLS_OVERLAY_ROOT or $TOOLS_IMAGE_ROOT"
+    finish 1
+  fi
+  log "starting $entry"
+  "$NODE" --disable-warning=DEP0040 "$entry" daemon run &
+  daemon_pid=$!
+  echo "$daemon_pid" > "$RUN_DIR/daemon.pid"
+  # a trapped signal interrupts wait while the daemon is still shutting down
+  while :; do
+    wait "$daemon_pid"
+    rc=$?
+    kill -0 "$daemon_pid" 2>/dev/null || break
+  done
+  daemon_pid=
+  rm -f "$RUN_DIR/daemon.pid"
+
+  if [ "$stopping" = 1 ]; then
+    log "daemon stopped (exit $rc)"
+    finish 0
+  fi
+  if [ -f "$RUN_DIR/restart" ]; then
+    rm -f "$RUN_DIR/restart"
+    log "restart requested (exit $rc)"
+    # an update may have installed a new overlay version worth trying
+    image_only=0
+    crashes=()
+    continue
+  fi
+
+  now="$(date +%s)"
+  recent=()
+  for t in "${crashes[@]}" "$now"; do
+    (( now - t < CRASH_WINDOW )) && recent+=("$t")
+  done
+  crashes=("${recent[@]}")
+  if (( ${#crashes[@]} >= CRASH_LIMIT )); then
+    if [[ "$entry" == "$TOOLS_OVERLAY_ROOT/"* ]]; then
+      log "overlay paseo crashed $CRASH_LIMIT times within ${CRASH_WINDOW}s, falling back to the image paseo"
+      image_only=1
+      crashes=()
+      continue
+    fi
+    log "daemon crashed $CRASH_LIMIT times within ${CRASH_WINDOW}s, giving up"
+    finish 1
+  fi
+  log "daemon exited (exit $rc), restarting in 5s"
+  sleep 5 &
+  wait $!
+  [ "$stopping" = 1 ] && finish 0
+done

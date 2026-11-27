@@ -47,6 +47,9 @@ RUN --mount=type=bind,source=docker/install/tool.sh,target=/tmp/install/tool.sh 
     --mount=type=bind,source=docker/lib/tools.sh,target=/tmp/lib/tools.sh \
     /tmp/install/tool.sh claude
 
+COPY docker/lib/ /usr/local/lib/
+COPY --chmod=0755 docker/bin/ /usr/local/bin/
+COPY --chmod=0755 docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY --chown=code:code docker/bashrc /home/code/.bashrc
 COPY --chown=code:code docker/bash_profile /home/code/.bash_profile
 # /etc/profile resets PATH in login shells (ssh, bash -l)
@@ -58,7 +61,8 @@ ENV CLAUDE_CONFIG_DIR=/config/claude \
     GH_CONFIG_DIR=/config/gh \
     GIT_CONFIG_GLOBAL=/config/git/config \
     JJ_CONFIG=/config/jj/config.toml \
-    HISTFILE=/config/shell/bash_history
+    HISTFILE=/config/shell/bash_history \
+    PASEO_HOME=/config/paseo
 
 # caches, all on the /cache volume
 ENV GOPATH=/cache/go \
@@ -69,7 +73,8 @@ ENV GOPATH=/cache/go \
     UV_PYTHON_INSTALL_DIR=/cache/uv/python \
     NPM_CONFIG_CACHE=/cache/npm \
     NPM_CONFIG_PREFIX=/cache/npm-global \
-    FNM_DIR=/cache/fnm
+    FNM_DIR=/cache/fnm \
+    PASEO_LOCAL_MODELS_DIR=/cache/paseo-models
 
 # tool settings
 ENV NODE_VERSION=${NODE_VERSION} \
@@ -85,8 +90,19 @@ ENV NODE_VERSION=${NODE_VERSION} \
     DISABLE_AUTOUPDATER=1 \
     DO_NOT_TRACK=1 \
     NPM_CONFIG_UPDATE_NOTIFIER=false \
+    PASEO_LISTEN=0.0.0.0:6767 \
+    PASEO_RELAY_ENABLED=false \
+    PASEO_WEB_UI_ENABLED=true \
+    PASEO_TRUSTED_PROXIES=loopback,uniquelocal \
     PATH=/cache/tools/bin:/opt/tools/bin:/cache/npm-global/bin:/opt/node/current/bin:/usr/local/go/bin:/opt/cargo/bin:/cache/go/bin:$PATH
 
 VOLUME ["/config", "/cache"]
+EXPOSE 6767
 
-CMD ["bash"]
+# start period covers the budgeted start-time update (UPDATE_START_BUDGET)
+HEALTHCHECK --interval=30s --timeout=5s --start-period=300s --retries=3 \
+  CMD curl -fsS -o /dev/null http://127.0.0.1:6767/api/health || exit 1
+
+# -g: signal the whole process group so agent children stop with the daemon
+ENTRYPOINT ["/usr/bin/tini", "-g", "--", "/usr/local/bin/entrypoint.sh"]
+CMD ["serve"]
