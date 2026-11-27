@@ -33,7 +33,7 @@ mount_type() {
   elif [[ "$root" =~ /volumes/([^/]+)/_data$ ]]; then
     local name="${BASH_REMATCH[1]}"
     if [[ "$name" =~ ^[0-9a-f]{64}$ ]]; then
-      printf '%-8s anonymous volume (lost on recreate)\n' "$mp"
+      printf '%-8s anonymous volume (lost on down or up -V)\n' "$mp"
     else
       printf '%-8s named volume %s\n' "$mp" "$name"
     fi

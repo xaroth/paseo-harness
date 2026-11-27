@@ -23,18 +23,18 @@ A Debian container image (`ghcr.io/xaroth/paseo-harness`) that runs the [Paseo](
    ```
    `pair` prints `PUBLIC_URL`, the host, port and SSL setting to enter under Settings, Add host, Direct connection (or the equivalent `tcp://host:port?ssl=true` Connection URI under Advanced), and a QR code of `PUBLIC_URL` that opens the web UI. The password is `PASEO_PASSWORD`.
 
-`docker compose exec paseo-harness doctor` shows tool versions, mounts, Claude and gh auth, registered MCP servers and daemon health.
-
 The entrypoint registers the `playwright` and `chrome-devtools` MCP servers with Claude Code at each start, both driving the image's headless Chromium. `register-mcp --remove` unregisters them.
 
 ## Reverse proxy
 
 The daemon port is bound to `127.0.0.1:${PORT:-6767}` on the host. Put a TLS reverse proxy in front and set `PUBLIC_URL` to its URL. The host of `PUBLIC_URL` is added to the daemon's allowed hostnames.
 
-Caddy:
+Caddy (Caddyfile):
 
-```sh
-caddy reverse-proxy --from paseo.example.com --to 127.0.0.1:6767
+```caddyfile
+paseo.example.com {
+    reverse_proxy 127.0.0.1:6767
+}
 ```
 
 nginx, which needs the WebSocket upgrade headers:
@@ -62,7 +62,7 @@ server {
 
 ### Dev server previews (optional)
 
-Paseo can serve dev servers started by agents at `<service>.<host of SERVICE_BASE_URL>`. Set `SERVICE_BASE_URL`, for example `https://dev.example.com`, and route a wildcard to the same daemon port. These previews have no authentication, so keep the wildcard LAN-only. It also needs a wildcard certificate (DNS challenge). Caddy example:
+Paseo can serve dev servers started by agents at a single-label name under the host of `SERVICE_BASE_URL`, such as `<script>--<project>.dev.example.com`. Set `SERVICE_BASE_URL`, for example `https://dev.example.com`, and route a wildcard to the same daemon port. These previews have no authentication, so keep the wildcard LAN-only. It also needs a wildcard certificate (DNS challenge). Add a block next to the main site in the Caddyfile:
 
 ```caddyfile
 *.dev.example.com {
@@ -89,7 +89,7 @@ Leave `SERVICE_BASE_URL` empty to disable previews.
 | `/cache` | named volume `cache` | Go, Cargo, uv, npm, fnm caches, updated tools, Paseo local models |
 | `$WORKSPACE` | bind mount of `WORKSPACE_HOST` (`./workspace`) | your repos |
 
-Removing the `cache` line from `compose.yaml` makes the cache ephemeral; tools then fall back to the image versions at each recreate.
+Without the `cache` line in `compose.yaml`, `/cache` is an anonymous volume: it survives `docker compose up` recreates and is lost on `docker compose down` followed by `up`, or `up -V`. With `UPDATE_CHANNEL=latest`, the start-time update then reinstalls newer tool versions.
 
 Paseo stores absolute paths. If you work on the same repos from the host, set `WORKSPACE` to the host path so both sides see the same path:
 
@@ -127,7 +127,7 @@ Commands, run with `docker compose exec paseo-harness <command>`:
 | `update --check` | per tool: image, overlay, previous and target version, last error |
 | `update` | update now; waits if another update is running |
 | `update --rollback <tool>` | switch back to the previous version, or to the image version when there is none. The version rolled back from is skipped until another version resolves or a pin names it |
-| `doctor` | versions in use (image or overlay), last update errors, mounts, auth, daemon health |
+| `doctor` | toolchain versions, fast tool versions in use (image or overlay) and last update errors, mounts, Claude and gh auth, registered MCP servers, daemon health, relay and `worktrees.root` |
 
 If the overlay Paseo crashes 5 times within 300 seconds, the supervisor falls back to the image Paseo. To pin the whole image, set `IMAGE`, for example `ghcr.io/xaroth/paseo-harness:v0.1.0`, and `UPDATE_CHANNEL=image`.
 
