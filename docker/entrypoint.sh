@@ -62,6 +62,13 @@ root_half() {
       chown -R "$puid:$pgid" "$d"
     fi
   done
+  # built as uid 1000; once per container, the chown persists in its layer
+  for d in /opt/rustup /opt/cargo; do
+    if [ -d "$d" ] && [ "$(stat -c %u "$d")" != "$puid" ]; then
+      log "chown -R $puid:$pgid $d"
+      chown -R "$puid:$pgid" "$d"
+    fi
+  done
   mkdir -p "$RUN_DIR"
   chown "$puid:$pgid" "$RUN_DIR"
   chmod 0700 "$RUN_DIR"
@@ -91,7 +98,7 @@ root_half() {
 # profile.d file; sshd applies ~/.ssh/environment to every session type.
 # Both are world-readable or on the config volume: PASEO_PASSWORD goes to
 # $RUN_DIR/env instead.
-HARNESS_ENV_VARS=(WORKSPACE PUBLIC_URL NODE_VERSION CLAUDE_CONFIG_DIR GH_CONFIG_DIR
+HARNESS_ENV_VARS=(WORKSPACE PUBLIC_URL TZ NODE_VERSION CLAUDE_CONFIG_DIR GH_CONFIG_DIR
   GIT_CONFIG_GLOBAL JJ_CONFIG HISTFILE GOPATH GOMODCACHE GOCACHE CARGO_HOME
   RUSTUP_HOME UV_CACHE_DIR UV_PYTHON_INSTALL_DIR NPM_CONFIG_CACHE
   NPM_CONFIG_PREFIX NPM_CONFIG_UPDATE_NOTIFIER FNM_DIR CHROME_PATH
@@ -223,12 +230,11 @@ link_fnm_node() {
   fi
 }
 
-# A hash saved by `paseo daemon set-password` also passes, but then `update`
-# cannot list agents and only applies Paseo updates at the next start.
+# A hash saved by `paseo daemon set-password` also passes.
 check_password() {
   [ -n "${PASEO_PASSWORD:-}" ] && return 0
   if [ "$(paseo daemon config get daemon.auth.password | jq -r .set)" = true ]; then
-    log "using the password hash in $PASEO_HOME/config.json; set PASEO_PASSWORD so updates can restart the daemon when idle"
+    log "using the password hash in $PASEO_HOME/config.json"
     return 0
   fi
   if [ "${ALLOW_NO_PASSWORD:-0}" = 1 ]; then

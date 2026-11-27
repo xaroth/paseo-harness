@@ -15,7 +15,7 @@ A Debian container image (`ghcr.io/xaroth/paseo-harness`) that runs the [Paseo](
    ```
 4. Log in to Claude Code once; the login is stored on the config volume:
    ```sh
-   docker compose exec paseo-harness claude
+   docker compose exec -u code paseo-harness claude
    ```
 5. Connect the Paseo app:
    ```sh
@@ -106,7 +106,7 @@ Worktrees go to `$WORKSPACE/.worktrees`; the entrypoint sets Paseo's `worktrees.
 
 Paseo, Claude Code, Playwright MCP and Chrome DevTools MCP are installed in the image under `/opt/tools`. Newer versions install into `/cache/tools`, which comes first on `PATH`. The image versions stay as the fallback.
 
-`update` runs at start (capped by `UPDATE_START_BUDGET`) and then every `UPDATE_INTERVAL`. Each version is installed in a staging directory and verified before it goes live (`--version`; for Paseo, a throwaway daemon must answer `/api/health`). A failed resolve, install or verification keeps the active version and is recorded as the tool's last error. A new Paseo goes live once no agent is running: `update` checks every 60 seconds, then restarts the daemon. This needs `PASEO_PASSWORD`; without it, the new Paseo applies at the next container start.
+`update` runs at start (capped by `UPDATE_START_BUDGET`) and then every `UPDATE_INTERVAL`. Each version is installed in a staging directory and verified before it goes live (`--version`; for Paseo, a throwaway daemon must answer `/api/health`). A failed resolve, install or verification keeps the active version and is recorded as the tool's last error. A new Paseo goes live once no agent is running: `update` checks every 60 seconds, then restarts the daemon.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |

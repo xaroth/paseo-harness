@@ -231,10 +231,10 @@ install() {
   rm -rf "$tmp"
 }
 
+# without a password, paseo ls authenticates through $PASEO_HOME/local-credential
 load_password() {
   # shellcheck source=/dev/null
-  [ -z "${PASEO_PASSWORD:-}" ] && [ -r "$RUN_DIR/env" ] && source "$RUN_DIR/env"
-  [ -n "${PASEO_PASSWORD:-}" ]
+  if [ -z "${PASEO_PASSWORD:-}" ] && [ -r "$RUN_DIR/env" ]; then source "$RUN_DIR/env"; fi
 }
 
 daemon_pid() {
@@ -254,10 +254,7 @@ daemon_cli() {
 restart_paseo() {
   local pid out busy fails=0 CLI
   pid="$(daemon_pid)" || { log "paseo: daemon not running, the new version applies at its next start"; return 0; }
-  if ! load_password; then
-    log "paseo: PASEO_PASSWORD not set, cannot see running agents; the new version applies at the next start"
-    return 0
-  fi
+  load_password
   daemon_cli "$pid"
   while :; do
     if out="$("${CLI[@]}" ls -a -g --json 2>&1 9>&-)" &&
@@ -365,7 +362,7 @@ update_tool() {
 
 # cycle <deadline> <restart 0|1>
 cycle() {
-  local deadline="$1" restart="$2" tool rc=0 paseo_changed=0
+  local deadline="$1" restart="$2" tool rc=0 paseo_changed=0 sel
   if [ "$CHANNEL" = image ]; then
     for tool in "${TOOLS[@]}"; do
       CHANGED=0
@@ -373,6 +370,14 @@ cycle() {
       [ "$tool" = paseo ] && paseo_changed="$CHANGED"
     done
   else
+    sel=" $(selected_tools | tr '\n' ' ')"
+    for tool in "${TOOLS[@]}"; do
+      [[ "$sel" == *" $tool "* ]] && continue
+      CHANGED=0
+      follow_image "$tool" "not in UPDATE_TOOLS"
+      state_set "$tool" '{last_error: null}'
+      [ "$tool" = paseo ] && paseo_changed="$CHANGED"
+    done
     while read -r tool; do
       if ((deadline > 0 && $(date +%s) >= deadline)); then
         log "start budget of ${UPDATE_START_BUDGET:-180}s used up, skipping the rest"
@@ -388,22 +393,27 @@ cycle() {
 }
 
 check() {
-  local tool spec img cur prev ver err
+  local tool spec img cur prev ver err sel note
   printf 'channel %s, min age %s\n' "$CHANNEL" "${UPDATE_MIN_AGE:-24h}"
+  sel=" $(selected_tools 2>/dev/null | tr '\n' ' ')"
   for tool in "${TOOLS[@]}"; do
     img="$(tool_version "$IMG" "$tool")"
     cur="$(tool_version "$OVL" "$tool")"
     prev="$(tool_version "$OVL" "$tool" previous)"
     spec="$(spec_of "$tool")"
-    if [ -z "$spec" ]; then
+    note=
+    if [ "$CHANNEL" != image ] && [[ "$sel" != *" $tool "* ]]; then
+      ver="$img"
+      note=' (not updated)'
+    elif [ -z "$spec" ]; then
       ver="$img"
     else
       ver="$(resolve "$tool" "$spec")" || ver="unresolved"
     fi
     err="$(state_get "$tool" last_error)"
+    [ -z "$note" ] && [ "$ver" != "${cur:-$img}" ] && note=' (update pending)'
     printf '%-20s image %-10s overlay %-10s previous %-10s target %-10s%s%s\n' "$tool" "${img:--}" \
-      "${cur:--}" "${prev:--}" "${ver:--}" \
-      "$([ "$ver" != "${cur:-$img}" ] && echo ' (update pending)')" "${err:+ last error: $err}"
+      "${cur:--}" "${prev:--}" "${ver:--}" "$note" "${err:+ last error: $err}"
   done
 }
 

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Toolchain in /opt, owned by code so rustup can update it. Registry goes to /cache/cargo at runtime.
+# Toolchain in /opt, owned by code so rustup can update it (the entrypoint re-owns
+# it when PUID differs). Registry goes to /cache/cargo at runtime.
 set -euo pipefail
 export RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo
 curl -fsSL https://sh.rustup.rs | sh -s -- -y --no-modify-path \

@@ -6,11 +6,9 @@ FROM debian:trixie-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# changes weekly to refresh apt packages
-ARG APT_EPOCH
 RUN --mount=type=bind,source=docker/install/apt.sh,target=/tmp/i.sh \
     --mount=type=bind,source=docker/apt-packages.txt,target=/tmp/apt-packages.txt \
-    echo "apt epoch: ${APT_EPOCH:-none}" && /tmp/i.sh
+    /tmp/i.sh
 ARG GH_MIN_VERSION=2.81.0
 RUN --mount=type=bind,source=docker/install/gh.sh,target=/tmp/i.sh /tmp/i.sh
 ARG NODE_VERSION=26.13.1
