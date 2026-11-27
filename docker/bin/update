@@ -31,6 +31,7 @@ NPM_MODS="$(dirname "$(readlink -f "$(command -v "$TOOLS_NODE")")")/../lib/node_
 # killed or removed on exit, so an interrupted run leaves no daemon, npm or stage dir behind
 VERIFY_PID=
 INSTALL_PID=
+SLEEP_PID=
 CLEANUP_DIRS=()
 # stop_group <pgid>: TERM, up to 10 s grace, then KILL; npm keeps writing for a while after TERM
 stop_group() {
@@ -41,14 +42,23 @@ stop_group() {
   sleep 0.5
 }
 cleanup() {
+  [ -n "$SLEEP_PID" ] && kill "$SLEEP_PID" 2>/dev/null
   [ -n "$VERIFY_PID" ] && stop_group "$VERIFY_PID"
   [ -n "$INSTALL_PID" ] && stop_group "$INSTALL_PID"
   ((${#CLEANUP_DIRS[@]})) && rm -rf "${CLEANUP_DIRS[@]}"
-  VERIFY_PID='' INSTALL_PID='' CLEANUP_DIRS=()
+  VERIFY_PID='' INSTALL_PID='' SLEEP_PID='' CLEANUP_DIRS=()
 }
 trap cleanup EXIT
 trap 'cleanup; exit 130' INT
 trap 'cleanup; exit 143' TERM
+
+# a foreground sleep would hold off the TERM trap until it ends; wait returns at once
+nap() {
+  sleep "$1" 9>&- &
+  SLEEP_PID=$!
+  wait "$SLEEP_PID"
+  SLEEP_PID=
+}
 
 log() { printf '[update] %s\n' "$*" >&2; }
 usage() { echo "usage: update [--once|--watch|--check|--rollback <tool>|--prune]"; }
@@ -263,7 +273,7 @@ restart_paseo() {
         return 0
       fi
     fi
-    sleep "$IDLE_POLL" 9>&-
+    nap "$IDLE_POLL"
     # harness-run restarted it meanwhile, which picks up the active version
     [ "$(daemon_pid)" = "$pid" ] || { log "paseo: daemon restarted meanwhile"; return 0; }
   done
@@ -299,8 +309,10 @@ update_tool() {
     return 0
   fi
   is_exact "$spec" && exact=1
-  # only an exact pin may hold the overlay below the image; the image itself has no min age
-  if [ -n "$cur" ] && semver_cmp "$cur" lt "$img" && ! { ((exact)) && [ "${spec#v}" = "$cur" ]; }; then
+  # only an exact pin or a rollback from the image version may hold the overlay below
+  # the image; the image itself has no min age
+  if [ -n "$cur" ] && semver_cmp "$cur" lt "$img" && ! { ((exact)) && [ "${spec#v}" = "$cur" ]; } &&
+    ! skipped "$tool" "$img"; then
     follow_image "$tool" "overlay $cur is older than the image"
     cur=
   fi
@@ -451,7 +463,7 @@ watch() {
     return 0
   fi
   while :; do
-    sleep "$INTERVAL" 9>&-
+    nap "$INTERVAL"
     if lock -n; then
       cycle 0 1
       unlock
