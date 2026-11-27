@@ -1,0 +1,41 @@
+name: paseo-harness
+services:
+  paseo-harness:
+    image: ${IMAGE:-ghcr.io/xaroth/paseo-harness:latest}
+    build: .
+    restart: unless-stopped
+    environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      TZ: ${TZ:-UTC}
+      WORKSPACE: ${WORKSPACE:-/workspace}
+      PUBLIC_URL: ${PUBLIC_URL:-}
+      PASEO_PASSWORD: ${PASEO_PASSWORD:-}
+      ALLOW_NO_PASSWORD: ${ALLOW_NO_PASSWORD:-0}
+      # mapped by the entrypoint; never pass PASEO_SERVICE_PROXY_* here (empty breaks the daemon)
+      SERVICE_BASE_URL: ${SERVICE_BASE_URL:-}
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
+      SSHD: ${SSHD:-0}
+      SSH_KEYS_FROM_GITHUB: ${SSH_KEYS_FROM_GITHUB:-}
+      KEYRING: ${KEYRING:-0}
+      UPDATE_CHANNEL: ${UPDATE_CHANNEL:-latest}
+      UPDATE_TOOLS: ${UPDATE_TOOLS:-paseo,claude,playwright-mcp,chrome-devtools-mcp}
+      UPDATE_MIN_AGE: ${UPDATE_MIN_AGE:-24h}
+      UPDATE_INTERVAL: ${UPDATE_INTERVAL:-6h}
+      UPDATE_TIMEOUT: ${UPDATE_TIMEOUT:-120}
+      PIN_PASEO: ${PIN_PASEO:-}
+      PIN_CLAUDE: ${PIN_CLAUDE:-}
+      PIN_PLAYWRIGHT_MCP: ${PIN_PLAYWRIGHT_MCP:-}
+      PIN_CHROME_DEVTOOLS_MCP: ${PIN_CHROME_DEVTOOLS_MCP:-}
+    volumes:
+      - config:/config
+      - cache:/cache          # remove this line for an ephemeral cache
+      - ${WORKSPACE_HOST:-./workspace}:${WORKSPACE:-/workspace}
+    ports:
+      - "127.0.0.1:${PORT:-6767}:6767"
+      - "${SSH_BIND:-127.0.0.1}:${SSH_PORT:-2222}:22"   # only answers when SSHD=1
+    shm_size: 1gb             # chromium
+    stop_grace_period: 30s
+volumes:
+  config:
+  cache:

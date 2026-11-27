@@ -5,8 +5,8 @@
 #   <root>/<tool>/current -> <ver>
 #   <root>/bin/<bin> -> ../<tool>/current/bin/<bin>
 
-TOOLS_IMAGE_ROOT=/opt/tools
-TOOLS_OVERLAY_ROOT=/cache/tools
+TOOLS_IMAGE_ROOT="${TOOLS_IMAGE_ROOT:-/opt/tools}"
+TOOLS_OVERLAY_ROOT="${TOOLS_OVERLAY_ROOT:-/cache/tools}"
 
 # image install order: most frequently bumped last
 TOOLS=(chrome-devtools-mcp playwright-mcp paseo claude)
@@ -35,6 +35,9 @@ tool_known() { [[ -n "${TOOL_PKG[$1]:-}" ]]; }
 # paseo -> PIN_PASEO, chrome-devtools-mcp -> PIN_CHROME_DEVTOOLS_MCP
 tool_pin_var() { local v="${1^^}"; echo "PIN_${v//-/_}"; }
 tool_arg_var() { echo "${TOOL_ARG[$1]}"; }
+
+# tool_pkg_dir <root> <tool>: package dir of the active version under <root>
+tool_pkg_dir() { echo "$1/$2/current/lib/node_modules/${TOOL_PKG[$2]}"; }
 
 # install env: skip browser downloads, keep claude from writing real config or self-updating
 tool_install_env() {
