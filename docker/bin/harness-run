@@ -8,7 +8,6 @@ set -uo pipefail
 source "$(dirname "$(readlink -f "$0")")/../lib/tools.sh"
 
 RUN_DIR="${HARNESS_RUN_DIR:-/run/harness}"
-NODE=/opt/node/current/bin/node
 CRASH_LIMIT=5
 CRASH_WINDOW=300
 
@@ -29,17 +28,11 @@ trap on_signal TERM INT
 
 # overlay first, then the image baseline
 paseo_entry() {
-  local root dir bin roots=("$TOOLS_OVERLAY_ROOT" "$TOOLS_IMAGE_ROOT")
+  local root entry roots=("$TOOLS_OVERLAY_ROOT" "$TOOLS_IMAGE_ROOT")
   [ "$image_only" = 1 ] && roots=("$TOOLS_IMAGE_ROOT")
   for root in "${roots[@]}"; do
-    dir="$(tool_pkg_dir "$root" paseo)"
-    [ -f "$dir/package.json" ] || continue
-    bin="$(jq -r --arg b "${TOOL_BIN[paseo]}" \
-      '.bin | if type == "string" then . else .[$b] end // empty' "$dir/package.json")"
-    if [ -n "$bin" ] && [ -f "$dir/$bin" ]; then
-      echo "$dir/$bin"
-      return 0
-    fi
+    # resolved, so the cmdline names the version dir even after `current` moves (update reads it)
+    entry="$(tool_bin_entry "$(tool_pkg_dir "$root" paseo)" paseo)" && readlink -f "$entry" && return 0
   done
   return 1
 }
@@ -65,7 +58,7 @@ while :; do
     finish 1
   fi
   log "starting $entry"
-  "$NODE" --disable-warning=DEP0040 "$entry" daemon run &
+  "$TOOLS_NODE" --disable-warning=DEP0040 "$entry" daemon run &
   daemon_pid=$!
   echo "$daemon_pid" > "$RUN_DIR/daemon.pid"
   # a trapped signal interrupts wait while the daemon is still shutting down
@@ -97,7 +90,7 @@ while :; do
   done
   crashes=("${recent[@]}")
   if (( ${#crashes[@]} >= CRASH_LIMIT )); then
-    if [[ "$entry" == "$TOOLS_OVERLAY_ROOT/"* ]]; then
+    if [[ "$entry" == "$(readlink -f "$TOOLS_OVERLAY_ROOT")/"* ]]; then
       log "overlay paseo crashed $CRASH_LIMIT times within ${CRASH_WINDOW}s, falling back to the image paseo"
       image_only=1
       crashes=()
