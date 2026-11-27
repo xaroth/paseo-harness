@@ -423,7 +423,11 @@ rollback() {
   local tool="$1" cur prev img
   tool_known "$tool" || { log "unknown tool '$tool' (known: ${TOOLS[*]})"; return 2; }
   # the next cycle would drop the rollback again
-  if [ "$CHANNEL" != image ] && ! selected_tools | grep -qx "$tool"; then
+  if [ "$CHANNEL" = image ]; then
+    log "UPDATE_CHANNEL=image: all tools follow the image"
+    return 2
+  fi
+  if ! selected_tools | grep -qx "$tool"; then
     log "$tool is not in UPDATE_TOOLS and follows the image"
     return 2
   fi
