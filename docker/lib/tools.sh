@@ -7,6 +7,9 @@
 
 TOOLS_IMAGE_ROOT="${TOOLS_IMAGE_ROOT:-/opt/tools}"
 TOOLS_OVERLAY_ROOT="${TOOLS_OVERLAY_ROOT:-/cache/tools}"
+# image Node, not an fnm-selected one; falls back to PATH outside the image
+TOOLS_NODE=/opt/node/current/bin/node
+[ -x "$TOOLS_NODE" ] || TOOLS_NODE=node
 
 # image install order: most frequently bumped last
 TOOLS=(chrome-devtools-mcp playwright-mcp paseo claude)
@@ -57,7 +60,7 @@ tool_strip_paths() {
 tool_npm_install() {
   local dir="$1" tool="$2" ver="$3" p
   shift 3
-  npm install -g --prefix "$dir" --no-fund --no-audit --dangerously-allow-all-scripts "$@" "${TOOL_PKG[$tool]}@${ver}"
+  npm install -g --prefix "$dir" --no-fund --no-audit --dangerously-allow-all-scripts "$@" "${TOOL_PKG[$tool]}@${ver}" || return
   while read -r p; do
     # shellcheck disable=SC2086 # glob on purpose
     [[ -n "$p" ]] && rm -rf "${dir:?}"/$p
@@ -80,4 +83,35 @@ tool_activate() {
   mkdir -p "$root/bin"
   tool_relink "$ver" "$root/$tool/current"
   tool_relink "../$tool/current/bin/$bin" "$root/bin/$bin"
+}
+
+# tool_version <root> <tool> [link]: version a link (default current) points at, empty when unset
+tool_version() {
+  local t
+  t="$(readlink "$1/$2/${3:-current}" 2>/dev/null)" || return 0
+  echo "${t##*/}"
+}
+
+# tool_bin_entry <pkg dir> <tool>: bin script path from package.json
+tool_bin_entry() {
+  local bin
+  bin="$(jq -r --arg b "${TOOL_BIN[$2]}" \
+    '.bin | if type == "string" then . else .[$b] end // empty' "$1/package.json" 2>/dev/null)"
+  [ -n "$bin" ] && [ -f "$1/$bin" ] && echo "$1/$bin"
+}
+
+# tool_switch <root> <tool> <ver>: previous <- current, then activate <ver>
+tool_switch() {
+  local root="$1" tool="$2" ver="$3" cur
+  cur="$(tool_version "$root" "$tool")"
+  [ -n "$cur" ] && [ "$cur" != "$ver" ] && tool_relink "$cur" "$root/$tool/previous"
+  tool_activate "$root" "$tool" "$ver"
+}
+
+# tool_unlink <root> <tool>: drop current and the bin link so the next root on PATH wins; current becomes previous
+tool_unlink() {
+  local root="$1" tool="$2" cur
+  cur="$(tool_version "$root" "$tool")"
+  [ -n "$cur" ] && tool_relink "$cur" "$root/$tool/previous"
+  rm -f "$root/$tool/current" "$root/bin/${TOOL_BIN[$tool]}"
 }

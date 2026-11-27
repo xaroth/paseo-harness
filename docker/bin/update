@@ -1,0 +1,397 @@
+#!/usr/bin/env bash
+# Keeps the fast tools current in the overlay (/cache/tools), which sits ahead
+# of the image's /opt/tools on PATH. A failed resolve, install or verify keeps
+# the active version. A new Paseo goes live once no agent is running.
+# Usage: update [--once|--watch|--check|--rollback <tool>|--prune]
+# jq and bash -c programs are single-quoted on purpose
+# shellcheck disable=SC2016
+set -uo pipefail
+
+if [ "$(id -u)" = 0 ]; then
+  exec gosu code "$0" "$@"
+fi
+
+# shellcheck source=docker/lib/tools.sh
+source "$(dirname "$(readlink -f "$0")")/../lib/tools.sh"
+
+RUN_DIR="${HARNESS_RUN_DIR:-/run/harness}"
+LOCK="$RUN_DIR/update.lock"
+OVL="$TOOLS_OVERLAY_ROOT"
+IMG="$TOOLS_IMAGE_ROOT"
+STATE="$OVL/state.json"
+STAGE="$OVL/.tmp"
+CHANNEL="${UPDATE_CHANNEL:-latest}"
+UPDATE_TIMEOUT="${UPDATE_TIMEOUT:-120}"
+IDLE_POLL="${UPDATE_IDLE_POLL:-60}"
+VERIFY_TIMEOUT=30
+
+log() { printf '[update] %s\n' "$*" >&2; }
+usage() { echo "usage: update [--once|--watch|--check|--rollback <tool>|--prune]"; }
+
+# 90, 90s, 30m, 6h, 1d -> seconds
+dur_seconds() {
+  local n="${1%[smhd]}"
+  [[ "$n" =~ ^[0-9]+$ ]] || return 1
+  case "$1" in
+    *d) echo $((n * 86400)) ;;
+    *h) echo $((n * 3600)) ;;
+    *m) echo $((n * 60)) ;;
+    *) echo "$n" ;;
+  esac
+}
+
+MIN_AGE="$(dur_seconds "${UPDATE_MIN_AGE:-24h}")" || { log "bad UPDATE_MIN_AGE '${UPDATE_MIN_AGE}'"; exit 2; }
+INTERVAL="$(dur_seconds "${UPDATE_INTERVAL:-6h}")" || { log "bad UPDATE_INTERVAL '${UPDATE_INTERVAL}'"; exit 2; }
+case "$CHANNEL" in latest|image|pinned) ;; *) log "bad UPDATE_CHANNEL '$CHANNEL' (latest|image|pinned)"; exit 2 ;; esac
+
+selected_tools() {
+  local t sel
+  IFS=, read -ra sel <<<"${UPDATE_TOOLS:-paseo,claude,playwright-mcp,chrome-devtools-mcp}"
+  for t in "${sel[@]}"; do
+    t="${t// /}"
+    [ -z "$t" ] && continue
+    if tool_known "$t"; then echo "$t"; else log "unknown tool '$t' in UPDATE_TOOLS (known: ${TOOLS[*]})"; fi
+  done
+}
+
+# fd 9 holds the lock; long-lived children get 9>&- so they cannot keep it
+lock() {
+  mkdir -p "$RUN_DIR"
+  exec 9>>"$LOCK"
+  flock "$@" 9
+}
+unlock() { flock -u 9; }
+
+state_get() { [ -f "$STATE" ] && jq -r --arg t "$1" --arg k "$2" '.[$t][$k] // empty' "$STATE" 2>/dev/null; }
+
+# state_set <tool> <jq object expr> [--arg name value]...
+state_set() {
+  local tool="$1" expr="$2" tmp
+  shift 2
+  mkdir -p "$OVL"
+  [ -s "$STATE" ] && jq -e . "$STATE" >/dev/null 2>&1 || echo '{}' > "$STATE"
+  tmp="$STATE.$$"
+  jq --arg t "$tool" "$@" ".[\$t] = ((.[\$t] // {}) + $expr)" "$STATE" > "$tmp" && mv "$tmp" "$STATE"
+}
+
+now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+
+record_error() {
+  log "$1: $2"
+  state_set "$1" '{last_error: $e, last_error_at: $at}' --arg e "$2" --arg at "$(now_iso)"
+}
+
+is_exact() { [[ "$1" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; }
+
+cutoff() { ((MIN_AGE > 0)) && date -u -d "@$(($(date +%s) - MIN_AGE))" +%Y-%m-%dT%H:%M:%SZ; }
+
+# spec <tool>: what to follow, empty means the image version
+spec_of() {
+  local pin_var
+  pin_var="$(tool_pin_var "$1")"
+  [ "$CHANNEL" = image ] && return 0
+  if [ -n "${!pin_var:-}" ]; then echo "${!pin_var}"; return 0; fi
+  [ "$CHANNEL" = latest ] && echo latest
+  return 0
+}
+
+# resolve <tool> <spec>: newest version matching spec and published before the
+# cutoff. npm view ignores --before, so pick with npm's own npm-pick-manifest.
+resolve() {
+  local tool="$1" spec="$2" before npm_mods
+  if is_exact "$spec"; then echo "${spec#v}"; return 0; fi
+  before="$(cutoff)"
+  npm_mods="$(dirname "$(readlink -f "$(command -v npm)")")/../node_modules"
+  timeout 30 npm view "${TOOL_PKG[$tool]}" versions time dist-tags --json 2>/dev/null |
+    "$TOOLS_NODE" -e '
+      const pick = require(process.argv[1] + "/npm-pick-manifest");
+      const p = JSON.parse(require("fs").readFileSync(0, "utf8"));
+      const versions = Object.fromEntries([].concat(p.versions).map(v => [v, { version: v }]));
+      const opts = process.argv[3] ? { before: process.argv[3] } : {};
+      console.log(pick({ versions, time: p.time, "dist-tags": p["dist-tags"] }, process.argv[2], opts).version);
+    ' "$npm_mods" "$spec" "$before" 2>/dev/null
+}
+
+free_port() {
+  "$TOOLS_NODE" -e 'const s=require("net").createServer();s.listen(0,"127.0.0.1",()=>{console.log(s.address().port);s.close()})'
+}
+
+# Throwaway daemon on its own home, config and loopback port; nothing real is touched.
+verify_paseo() {
+  local dir="$1" entry port tmp pid ok=1 i
+  entry="$(tool_bin_entry "$dir/lib/node_modules/${TOOL_PKG[paseo]}" paseo)" || { echo "no paseo bin entry"; return 1; }
+  port="$(free_port)" || return 1
+  tmp="$(mktemp -d)"
+  mkdir -p "$tmp/home" "$tmp/claude" "$tmp/models"
+  env -i PATH="$PATH" HOME="$tmp" PASEO_HOME="$tmp/home" CLAUDE_CONFIG_DIR="$tmp/claude" \
+    PASEO_LOCAL_MODELS_DIR="$tmp/models" PASEO_LISTEN="127.0.0.1:$port" PASEO_RELAY_ENABLED=false \
+    setsid "$TOOLS_NODE" --disable-warning=DEP0040 "$entry" daemon run >"$tmp/log" 2>&1 9>&- &
+  pid=$!
+  for ((i = 0; i < VERIFY_TIMEOUT; i++)); do
+    if curl -fsS --max-time 2 "http://127.0.0.1:$port/api/health" >/dev/null 2>&1; then ok=0; break; fi
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 1
+  done
+  kill -TERM -- "-$pid" 2>/dev/null
+  for ((i = 0; i < 10; i++)); do kill -0 "$pid" 2>/dev/null || break; sleep 1; done
+  kill -KILL -- "-$pid" 2>/dev/null
+  wait "$pid" 2>/dev/null
+  ((ok == 0)) || { echo "throwaway daemon did not answer /api/health within ${VERIFY_TIMEOUT}s"; tail -n 5 "$tmp/log"; }
+  rm -rf "$tmp"
+  return "$ok"
+}
+
+verify() {
+  local tool="$1" dir="$2" tmp out rc
+  if [ "$tool" = paseo ]; then verify_paseo "$dir"; return; fi
+  tmp="$(mktemp -d)"
+  out="$(CLAUDE_CONFIG_DIR="$tmp" timeout "$VERIFY_TIMEOUT" "$dir/bin/${TOOL_BIN[$tool]}" --version 2>&1 9>&-)"
+  rc=$?
+  rm -rf "$tmp"
+  ((rc == 0)) || echo "$out" | tail -n 5
+  return "$rc"
+}
+
+# install <tool> <ver> <timeout> [npm args]: stage, verify, move into place
+install() {
+  local tool="$1" ver="$2" limit="$3" tmp dest out
+  shift 3
+  tmp="$STAGE/$tool-$ver"
+  dest="$OVL/$tool/$ver"
+  rm -rf "$tmp"
+  mkdir -p "$STAGE" "$OVL/$tool"
+  log "$tool: installing $ver"
+  if ! out="$(timeout "$limit" bash -c 'source "$1"; shift; tool_install_env; tool_npm_install "$@"' _ \
+      "$(dirname "$(readlink -f "$0")")/../lib/tools.sh" "$tmp" "$tool" "$ver" --loglevel=error "$@" 2>&1 9>&-)"; then
+    rm -rf "$tmp"
+    INSTALL_ERR="npm install $ver failed or timed out after ${limit}s: $(tail -n 3 <<<"$out" | tr '\n' ' ')"
+    return 1
+  fi
+  if ! out="$(verify "$tool" "$tmp")"; then
+    rm -rf "$tmp"
+    INSTALL_ERR="$ver failed verification: $(tr '\n' ' ' <<<"$out")"
+    return 1
+  fi
+  rm -rf "$dest"
+  mv -T "$tmp" "$dest"
+}
+
+load_password() {
+  # shellcheck source=/dev/null
+  [ -z "${PASEO_PASSWORD:-}" ] && [ -r "$RUN_DIR/env" ] && source "$RUN_DIR/env"
+  [ -n "${PASEO_PASSWORD:-}" ]
+}
+
+daemon_pid() {
+  local pid
+  pid="$(cat "$RUN_DIR/daemon.pid" 2>/dev/null)" || return 1
+  [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && echo "$pid"
+}
+
+# Restart the running daemon onto the active Paseo once no agent is busy.
+restart_paseo() {
+  local pid out busy
+  pid="$(daemon_pid)" || { log "paseo: daemon not running, the new version applies at its next start"; return 0; }
+  if ! load_password; then
+    log "paseo: PASEO_PASSWORD not set, cannot see running agents; the new version applies at the next start"
+    return 0
+  fi
+  while :; do
+    if out="$(paseo ls -a -g --json 2>&1 9>&-)" &&
+      busy="$(jq '[.[] | select(.status == "running" or .status == "initializing")] | length' <<<"$out" 2>/dev/null)"; then
+      ((busy == 0)) && break
+      log "paseo: $busy agent(s) running, checking again in ${IDLE_POLL}s"
+    else
+      log "paseo: cannot list agents ($(tr '\n' ' ' <<<"$out" | cut -c1-200)), checking again in ${IDLE_POLL}s"
+    fi
+    sleep "$IDLE_POLL" 9>&-
+    # harness-run restarted it meanwhile, which picks up the active version
+    [ "$(daemon_pid)" = "$pid" ] || { log "paseo: daemon restarted meanwhile"; return 0; }
+  done
+  log "paseo: idle, restarting daemon (pid $pid)"
+  touch "$RUN_DIR/restart"
+  kill -TERM "$pid"
+}
+
+# update_tool <tool> <deadline epoch or 0>; sets CHANGED=1 when the active version moved
+update_tool() {
+  local tool="$1" deadline="$2" spec ver img cur limit skip before_args=()
+  img="$(tool_version "$IMG" "$tool")"
+  cur="$(tool_version "$OVL" "$tool")"
+  spec="$(spec_of "$tool")"
+  if [ -z "$spec" ]; then
+    if [ -n "$cur" ]; then
+      log "$tool: following the image ($img), dropping overlay $cur"
+      tool_unlink "$OVL" "$tool"
+      CHANGED=1
+    fi
+    state_set "$tool" '{resolved: $v, last_error: null}' --arg v "$img"
+    return 0
+  fi
+  if ! ver="$(resolve "$tool" "$spec")" || [ -z "$ver" ]; then
+    record_error "$tool" "cannot resolve ${TOOL_PKG[$tool]}@$spec (min age ${UPDATE_MIN_AGE:-24h}), keeping ${cur:-image $img}"
+    return 1
+  fi
+  skip="$(state_get "$tool" skip)"
+  if [ -n "$skip" ] && [ "$skip" = "$ver" ]; then
+    log "$tool: $ver was rolled back, keeping ${cur:-image $img} until a newer version resolves"
+    return 0
+  fi
+  state_set "$tool" '{resolved: $v, skip: null}' --arg v "$ver"
+
+  if [ "$ver" = "$img" ]; then
+    if [ -n "$cur" ]; then
+      log "$tool: image has $ver, dropping overlay $cur"
+      tool_unlink "$OVL" "$tool"
+      CHANGED=1
+    else
+      log "$tool: image $ver is current"
+    fi
+    state_set "$tool" '{last_error: null}'
+    return 0
+  fi
+  if [ "$ver" = "$cur" ]; then
+    log "$tool: overlay $ver is current"
+    state_set "$tool" '{last_error: null}'
+    return 0
+  fi
+
+  if [ ! -d "$OVL/$tool/$ver" ]; then
+    limit="$UPDATE_TIMEOUT"
+    if ((deadline > 0)); then
+      local left=$((deadline - $(date +%s)))
+      ((left < limit)) && limit="$left"
+      if ((limit <= 0)); then
+        log "$tool: start budget used up, $ver installs at the next check"
+        return 0
+      fi
+    fi
+    is_exact "$spec" || [ -z "$(cutoff)" ] || before_args=("--before=$(cutoff)")
+    if ! install "$tool" "$ver" "$limit" "${before_args[@]}"; then
+      record_error "$tool" "$INSTALL_ERR; keeping ${cur:-image $img}"
+      return 1
+    fi
+    state_set "$tool" '{installed_at: $at}' --arg at "$(now_iso)"
+  fi
+  tool_switch "$OVL" "$tool" "$ver"
+  log "$tool: now $ver (was ${cur:-image $img})"
+  state_set "$tool" '{active: $v, last_error: null}' --arg v "$ver"
+  CHANGED=1
+}
+
+# cycle <deadline> <restart 0|1>
+cycle() {
+  local deadline="$1" restart="$2" tool rc=0 paseo_changed=0
+  if [ "$CHANNEL" = image ]; then
+    for tool in "${TOOLS[@]}"; do
+      CHANGED=0
+      update_tool "$tool" 0 || rc=1
+      [ "$tool" = paseo ] && paseo_changed="$CHANGED"
+    done
+  else
+    while read -r tool; do
+      if ((deadline > 0 && $(date +%s) >= deadline)); then
+        log "start budget of ${UPDATE_START_BUDGET:-180}s used up, skipping the rest"
+        break
+      fi
+      CHANGED=0
+      update_tool "$tool" "$deadline" || rc=1
+      [ "$tool" = paseo ] && paseo_changed="$CHANGED"
+    done < <(selected_tools)
+  fi
+  ((paseo_changed && restart)) && restart_paseo
+  return "$rc"
+}
+
+check() {
+  local tool spec img cur prev ver err
+  printf 'channel %s, min age %s\n' "$CHANNEL" "${UPDATE_MIN_AGE:-24h}"
+  for tool in "${TOOLS[@]}"; do
+    img="$(tool_version "$IMG" "$tool")"
+    cur="$(tool_version "$OVL" "$tool")"
+    prev="$(tool_version "$OVL" "$tool" previous)"
+    spec="$(spec_of "$tool")"
+    if [ -z "$spec" ]; then
+      ver="$img"
+    else
+      ver="$(resolve "$tool" "$spec")" || ver="unresolved"
+    fi
+    err="$(state_get "$tool" last_error)"
+    printf '%-20s image %-10s overlay %-10s previous %-10s target %-10s%s%s\n' "$tool" "${img:--}" \
+      "${cur:--}" "${prev:--}" "${ver:--}" \
+      "$([ "$ver" != "${cur:-$img}" ] && echo ' (update pending)')" "${err:+ last error: $err}"
+  done
+}
+
+rollback() {
+  local tool="$1" cur prev
+  tool_known "$tool" || { log "unknown tool '$tool' (known: ${TOOLS[*]})"; return 2; }
+  cur="$(tool_version "$OVL" "$tool")"
+  prev="$(tool_version "$OVL" "$tool" previous)"
+  if [ -z "$prev" ] || [ ! -d "$OVL/$tool/$prev" ]; then
+    log "$tool: no previous version to roll back to"
+    return 1
+  fi
+  [ -n "$cur" ] || cur="$(tool_version "$IMG" "$tool")"
+  tool_switch "$OVL" "$tool" "$prev"
+  log "$tool: rolled back to $prev (was $cur)"
+  # without skip the next check would reinstall the version just rolled back from
+  state_set "$tool" '{active: $v, skip: $s}' --arg v "$prev" --arg s "$cur"
+  [ "$tool" = paseo ] && restart_paseo
+  return 0
+}
+
+prune() {
+  local tool d cur prev
+  for tool in "${TOOLS[@]}"; do
+    [ -d "$OVL/$tool" ] || continue
+    cur="$(tool_version "$OVL" "$tool")"
+    prev="$(tool_version "$OVL" "$tool" previous)"
+    for d in "$OVL/$tool"/*/; do
+      d="${d%/}"
+      [ -d "$d" ] && [ ! -L "$d" ] || continue
+      case "${d##*/}" in "$cur"|"$prev") continue ;; esac
+      log "$tool: pruning ${d##*/}"
+      rm -rf "$d"
+    done
+  done
+  if [ -d "$STAGE" ]; then rm -rf "${STAGE:?}"/* "$STAGE"/.[!.]* 2>/dev/null; fi
+  return 0
+}
+
+watch() {
+  if ((INTERVAL == 0)); then
+    log "UPDATE_INTERVAL=0, no periodic checks"
+    return 0
+  fi
+  while :; do
+    sleep "$INTERVAL" 9>&-
+    if lock -n; then
+      cycle 0 1
+      unlock
+    else
+      log "another update is running, skipping this check"
+    fi
+  done
+}
+
+case "${1:-}" in
+  --once)
+    budget="${UPDATE_START_BUDGET:-180}"
+    lock -w "$budget" || { log "lock busy for ${budget}s, skipping"; exit 1; }
+    cycle "$(($(date +%s) + budget))" 0 ;;
+  --watch) watch ;;
+  --check) check ;;
+  --rollback)
+    [ -n "${2:-}" ] || { usage >&2; exit 2; }
+    lock
+    rollback "$2" ;;
+  --prune)
+    lock
+    prune ;;
+  "")
+    lock -n || { log "another update is running, waiting for it"; lock; }
+    cycle 0 1 ;;
+  -h|--help) usage ;;
+  *) usage >&2; exit 2 ;;
+esac
