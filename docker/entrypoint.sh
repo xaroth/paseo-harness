@@ -255,14 +255,12 @@ write_run_env() {
   (umask 077; printf 'export PASEO_PASSWORD=%q\n' "$PASEO_PASSWORD" > "$f")
 }
 
+# update takes $RUN_DIR/update.lock itself; the timeout keeps a stuck update from blocking boot
 start_update() {
   command -v update >/dev/null || return 0
-  # the lock is held here, so --once and --prune do not take it themselves
-  (
-    flock 9
-    update --once || log "update --once failed; using the installed versions"
-    update --prune || log "update --prune failed"
-  ) 9>"$RUN_DIR/update.lock"
+  timeout "$(( ${UPDATE_START_BUDGET:-180} + 60 ))" update --once ||
+    log "update --once failed or timed out; using the installed versions"
+  update --prune || log "update --prune failed"
 }
 
 user_half() {
@@ -281,6 +279,8 @@ user_half() {
     register-mcp || log "register-mcp failed; run it manually later"
     start_update
     write_run_env
+    # left by a killed container; a recycled pid would make the daemon refuse to start
+    rm -f "$PASEO_HOME/paseo.pid" "$RUN_DIR/daemon.pid" "$RUN_DIR/restart"
     exec harness-run
   fi
   exec "$@"

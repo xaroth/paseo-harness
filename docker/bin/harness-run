@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Supervises `paseo daemon run`. Restarts at once when `update` leaves the
-# restart marker, retries crashes after 5 s, and exits 1 after 5 crashes in
-# 300 s so Docker restarts the container.
+# restart marker, retries crashes after 5 s. After 5 crashes in 300 s on the
+# overlay Paseo it falls back to the image Paseo; on the image one it exits 1
+# so Docker restarts the container.
 set -uo pipefail
 # shellcheck source=docker/lib/tools.sh
 source "$(dirname "$(readlink -f "$0")")/../lib/tools.sh"
@@ -16,6 +17,7 @@ log() { printf '[harness-run] %s\n' "$*" >&2; }
 stopping=0
 daemon_pid=
 watch_pid=
+image_only=0
 
 on_signal() {
   stopping=1
@@ -27,8 +29,9 @@ trap on_signal TERM INT
 
 # overlay first, then the image baseline
 paseo_entry() {
-  local root dir bin
-  for root in "$TOOLS_OVERLAY_ROOT" "$TOOLS_IMAGE_ROOT"; do
+  local root dir bin roots=("$TOOLS_OVERLAY_ROOT" "$TOOLS_IMAGE_ROOT")
+  [ "$image_only" = 1 ] && roots=("$TOOLS_IMAGE_ROOT")
+  for root in "${roots[@]}"; do
     dir="$(tool_pkg_dir "$root" paseo)"
     [ -f "$dir/package.json" ] || continue
     bin="$(jq -r --arg b "${TOOL_BIN[paseo]}" \
@@ -81,6 +84,9 @@ while :; do
   if [ -f "$RUN_DIR/restart" ]; then
     rm -f "$RUN_DIR/restart"
     log "restart requested (exit $rc)"
+    # an update may have installed a new overlay version worth trying
+    image_only=0
+    crashes=()
     continue
   fi
 
@@ -91,6 +97,12 @@ while :; do
   done
   crashes=("${recent[@]}")
   if (( ${#crashes[@]} >= CRASH_LIMIT )); then
+    if [[ "$entry" == "$TOOLS_OVERLAY_ROOT/"* ]]; then
+      log "overlay paseo crashed $CRASH_LIMIT times within ${CRASH_WINDOW}s, falling back to the image paseo"
+      image_only=1
+      crashes=()
+      continue
+    fi
     log "daemon crashed $CRASH_LIMIT times within ${CRASH_WINDOW}s, giving up"
     finish 1
   fi
