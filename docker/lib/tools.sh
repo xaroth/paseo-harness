@@ -42,11 +42,23 @@ tool_install_env() {
     NPM_CONFIG_UPDATE_NOTIFIER=false
 }
 
-# tool_npm_install <dir> <tool> <ver> [npm args...]; scripts stay on: claude's postinstall installs its native binary
+# per-tool dead weight, globs relative to the install dir
+tool_strip_paths() {
+  case "$1" in
+    # paseo always runs the claude on PATH, never the agent SDK's bundled native binary
+    paseo) echo 'lib/node_modules/@getpaseo/cli/node_modules/@anthropic-ai/claude-agent-sdk-*' ;;
+  esac
+}
+
+# tool_npm_install <dir> <tool> <ver> [npm args...]; scripts on: claude's postinstall installs its native binary
 tool_npm_install() {
-  local dir="$1" tool="$2" ver="$3"
+  local dir="$1" tool="$2" ver="$3" p
   shift 3
-  npm install -g --prefix "$dir" --no-fund --no-audit "$@" "${TOOL_PKG[$tool]}@${ver}"
+  npm install -g --prefix "$dir" --no-fund --no-audit --dangerously-allow-all-scripts "$@" "${TOOL_PKG[$tool]}@${ver}"
+  while read -r p; do
+    # shellcheck disable=SC2086 # glob on purpose
+    [[ -n "$p" ]] && rm -rf "$dir"/$p
+  done < <(tool_strip_paths "$tool")
   # source maps and other platforms' prebuilds are dead weight
   find "$dir" -name '*.map' -type f -delete
   find "$dir" -type d -path '*/prebuilds/*' ! -path '*/prebuilds/linux-x64*' -prune -exec rm -rf {} +
