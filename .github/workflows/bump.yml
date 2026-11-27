@@ -1,0 +1,56 @@
+name: bump
+
+# Weekly: open or update one PR on bump/versions with the latest upstream pins,
+# then rebuild main to pick up Debian fixes. The PR is opened with the App token
+# so build.yml runs on it; merging it tags the next patch release.
+
+on:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: app token
+        id: app
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ vars.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: bump versions
+        id: bump
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: scripts/bump-versions.sh
+
+      - name: open or update PR
+        if: steps.bump.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v8
+        with:
+          token: ${{ steps.app.outputs.token }}
+          branch: bump/versions
+          delete-branch: true
+          add-paths: Dockerfile
+          labels: bump
+          commit-message: "chore: bump pinned versions"
+          author: Xaroth Brook <xaroth+github@xaroth.nl>
+          committer: Xaroth Brook <xaroth+github@xaroth.nl>
+          title: "chore: bump pinned versions"
+          body: |
+            ${{ steps.bump.outputs.table }}
+
+            Merging tags the next patch release.
+
+      - name: weekly rebuild
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run build.yml --repo "$GITHUB_REPOSITORY" --ref main -f rebuild=true
