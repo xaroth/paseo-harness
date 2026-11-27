@@ -30,7 +30,7 @@ services:
       PIN_CHROME_DEVTOOLS_MCP: ${PIN_CHROME_DEVTOOLS_MCP:-}
     volumes:
       - config:/config
-      - cache:/cache          # remove this line for an ephemeral cache
+      - cache:/cache          # without it, an anonymous volume, lost on down or up -V
       - ${WORKSPACE_HOST:-./workspace}:${WORKSPACE:-/workspace}
     ports:
       - "127.0.0.1:${PORT:-6767}:6767"
