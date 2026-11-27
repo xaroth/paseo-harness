@@ -36,7 +36,7 @@ ARG PLAYWRIGHT_MCP_VERSION=0.0.86
 RUN --mount=type=bind,source=docker/install/tool.sh,target=/tmp/install/tool.sh \
     --mount=type=bind,source=docker/lib/tools.sh,target=/tmp/lib/tools.sh \
     /tmp/install/tool.sh playwright-mcp
-ARG PASEO_VERSION=0.17.5
+ARG PASEO_VERSION=0.18.0
 RUN --mount=type=bind,source=docker/install/tool.sh,target=/tmp/install/tool.sh \
     --mount=type=bind,source=docker/lib/tools.sh,target=/tmp/lib/tools.sh \
     /tmp/install/tool.sh paseo
