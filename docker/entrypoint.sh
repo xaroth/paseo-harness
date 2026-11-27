@@ -62,13 +62,6 @@ root_half() {
       chown -R "$puid:$pgid" "$d"
     fi
   done
-  # built as uid 1000; once per container, the chown persists in its layer
-  for d in /opt/rustup /opt/cargo; do
-    if [ -d "$d" ] && [ "$(stat -c %u "$d")" != "$puid" ]; then
-      log "chown -R $puid:$pgid $d"
-      chown -R "$puid:$pgid" "$d"
-    fi
-  done
   mkdir -p "$RUN_DIR"
   chown "$puid:$pgid" "$RUN_DIR"
   chmod 0700 "$RUN_DIR"

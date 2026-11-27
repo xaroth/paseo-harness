@@ -111,7 +111,7 @@ Paseo, Claude Code, Playwright MCP and Chrome DevTools MCP are installed in the 
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `UPDATE_CHANNEL` | `latest` | `latest`: newest release older than `UPDATE_MIN_AGE`. `image`: image versions only. `pinned`: `PIN_*` versions, image versions for tools without a pin |
-| `UPDATE_TOOLS` | `paseo,claude,playwright-mcp,chrome-devtools-mcp` | tools kept up to date |
+| `UPDATE_TOOLS` | `paseo,claude,playwright-mcp,chrome-devtools-mcp` | tools kept up to date; others use the image version and ignore `PIN_*` |
 | `UPDATE_MIN_AGE` | `24h` | minimum release age; accepts `s`, `m`, `h`, `d` suffixes |
 | `UPDATE_INTERVAL` | `6h` | how often to check while running; `0` checks at start only |
 | `UPDATE_TIMEOUT` | `120` | seconds per install |
