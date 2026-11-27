@@ -28,10 +28,11 @@ trap on_signal TERM INT
 
 # overlay first, then the image baseline
 paseo_entry() {
-  local root roots=("$TOOLS_OVERLAY_ROOT" "$TOOLS_IMAGE_ROOT")
+  local root entry roots=("$TOOLS_OVERLAY_ROOT" "$TOOLS_IMAGE_ROOT")
   [ "$image_only" = 1 ] && roots=("$TOOLS_IMAGE_ROOT")
   for root in "${roots[@]}"; do
-    tool_bin_entry "$(tool_pkg_dir "$root" paseo)" paseo && return 0
+    # resolved, so the cmdline names the version dir even after `current` moves (update reads it)
+    entry="$(tool_bin_entry "$(tool_pkg_dir "$root" paseo)" paseo)" && readlink -f "$entry" && return 0
   done
   return 1
 }
@@ -89,7 +90,7 @@ while :; do
   done
   crashes=("${recent[@]}")
   if (( ${#crashes[@]} >= CRASH_LIMIT )); then
-    if [[ "$entry" == "$TOOLS_OVERLAY_ROOT/"* ]]; then
+    if [[ "$entry" == "$(readlink -f "$TOOLS_OVERLAY_ROOT")/"* ]]; then
       log "overlay paseo crashed $CRASH_LIMIT times within ${CRASH_WINDOW}s, falling back to the image paseo"
       image_only=1
       crashes=()

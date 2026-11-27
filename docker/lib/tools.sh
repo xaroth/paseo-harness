@@ -101,11 +101,16 @@ tool_bin_entry() {
   [ -n "$bin" ] && [ -f "$1/$bin" ] && echo "$1/$bin"
 }
 
-# tool_switch <root> <tool> <ver>: previous <- current, then activate <ver>
+# tool_switch <root> <tool> <ver>: previous <- current, then activate <ver>.
+# Coming from the image (no current) clears previous: rolling back then means back to the image.
 tool_switch() {
   local root="$1" tool="$2" ver="$3" cur
   cur="$(tool_version "$root" "$tool")"
-  [ -n "$cur" ] && [ "$cur" != "$ver" ] && tool_relink "$cur" "$root/$tool/previous"
+  if [ -z "$cur" ]; then
+    rm -f "$root/$tool/previous"
+  elif [ "$cur" != "$ver" ]; then
+    tool_relink "$cur" "$root/$tool/previous"
+  fi
   tool_activate "$root" "$tool" "$ver"
 }
 
