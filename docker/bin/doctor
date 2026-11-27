@@ -1,0 +1,167 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+if [ "$(id -u)" = 0 ]; then
+  exec gosu code "$0" "$@"
+fi
+
+# shellcheck source=docker/lib/tools.sh
+source "$(dirname "$(readlink -f "$0")")/../lib/tools.sh"
+
+STATE="$TOOLS_OVERLAY_ROOT/state.json"
+PORT=6767
+
+section() { printf '\n== %s\n' "$*"; }
+
+version() {
+  local name="$1" out; shift
+  if ! command -v "$1" >/dev/null; then
+    printf '%-22s missing\n' "$name"
+    return 0
+  fi
+  out="$(timeout 20 "$@" 2>&1 | head -n1)" || true
+  printf '%-22s %s\n' "$name" "${out:-missing}"
+}
+
+# Classifies a mountpoint from mountinfo: docker volumes have root .../volumes/<name>/_data
+mount_type() {
+  local mp="$1" root fstype
+  root="$(awk -v mp="$mp" '$5 == mp { print $4; exit }' /proc/self/mountinfo)"
+  fstype="$(awk -v mp="$mp" '$5 == mp { for (i = 7; i <= NF; i++) if ($i == "-") { print $(i + 1); exit } }' /proc/self/mountinfo)"
+  if [ -z "$root" ]; then
+    printf '%-8s none (container layer, lost on recreate)\n' "$mp"
+  elif [[ "$root" =~ /volumes/([^/]+)/_data$ ]]; then
+    local name="${BASH_REMATCH[1]}"
+    if [[ "$name" =~ ^[0-9a-f]{64}$ ]]; then
+      printf '%-8s anonymous volume (lost on recreate)\n' "$mp"
+    else
+      printf '%-8s named volume %s\n' "$mp" "$name"
+    fi
+  elif [ "$fstype" = tmpfs ]; then
+    printf '%-8s tmpfs\n' "$mp"
+  else
+    printf '%-8s bind %s\n' "$mp" "$root"
+  fi
+  if [ -d "$mp" ] && [ ! -w "$mp" ]; then
+    printf '%-8s not writable by uid %s\n' "$mp" "$(id -u)"
+  fi
+}
+
+run() {
+  local out
+  if ! command -v "$1" >/dev/null; then
+    echo "missing"
+    return 0
+  fi
+  out="$(timeout 60 "$@" 2>&1)" || true
+  printf '%s\n' "${out:-missing}"
+}
+
+link_version() {
+  local t
+  t="$(readlink "$1/$2/current" 2>/dev/null)" || return 0
+  echo "${t##*/}"
+}
+
+# what PATH actually runs: <root>/<tool>/<ver>/... after resolving links
+using_version() {
+  local tool="$1" path root rest
+  path="$(command -v "${TOOL_BIN[$tool]}")" || { echo missing; return; }
+  path="$(readlink -f "$path")"
+  for root in overlay:"$TOOLS_OVERLAY_ROOT" image:"$TOOLS_IMAGE_ROOT"; do
+    if [[ "$path" == "${root#*:}/$tool/"* ]]; then
+      rest="${path#"${root#*:}/$tool/"}"
+      echo "${rest%%/*} (${root%%:*})"
+      return
+    fi
+  done
+  echo "other ($path)"
+}
+
+state_of() {
+  [ -f "$STATE" ] || return 0
+  jq -r --arg t "$1" '.[$t] // {} |
+    [ (if .resolved then "resolved \(.resolved)" else empty end),
+      (if .skip then "skip \(.skip)" else empty end),
+      (if .last_error then "last error \(.last_error) (\(.last_error_at // "?"))" else empty end)
+    ] | join(", ")' "$STATE" 2>/dev/null || echo "state.json unreadable"
+}
+
+section "versions"
+version paseo paseo --version
+version claude claude --version
+version node node --version
+version npm npm --version
+version go go version
+version rustc rustc --version
+version cargo cargo --version
+version clang clang --version
+version cmake cmake --version
+version python3 python3 --version
+version uv uv --version
+version fnm fnm --version
+version jj jj --version
+version flatc flatc --version
+version gh gh --version
+version git git --version
+version git-lfs git-lfs --version
+version cloudflared cloudflared --version
+version ffmpeg ffmpeg -version
+version convert convert --version
+version psql psql --version
+version redis-cli redis-cli --version
+version chromium chromium --version
+version playwright-mcp playwright-mcp --version
+version chrome-devtools-mcp chrome-devtools-mcp --version
+
+section "fast tools"
+[ -f "$STATE" ] || echo "no $STATE (no update has run)"
+for tool in "${TOOLS[@]}"; do
+  img="$(link_version "$TOOLS_IMAGE_ROOT" "$tool")"
+  ovl="$(link_version "$TOOLS_OVERLAY_ROOT" "$tool")"
+  st="$(state_of "$tool")"
+  printf '%-20s image %-10s overlay %-10s using %s%s\n' "$tool" "${img:--}" "${ovl:--}" \
+    "$(using_version "$tool")" "${st:+, $st}"
+done
+
+section "user"
+echo "uid=$(id -u) gid=$(id -g) home=$HOME"
+
+section "mounts"
+mount_type /config
+mount_type /cache
+mount_type "${WORKSPACE:-/workspace}"
+
+section "claude auth"
+run claude auth status | head -n 10
+
+section "gh auth"
+run gh auth status | head -n 10
+
+section "claude mcp"
+run claude mcp list
+
+section "paseo"
+if curl -fsS --max-time 5 -o /dev/null "http://127.0.0.1:$PORT/api/health" 2>/dev/null; then
+  echo "health   ok (127.0.0.1:$PORT)"
+else
+  echo "health   no answer on 127.0.0.1:$PORT/api/health"
+fi
+if status="$(timeout 20 paseo daemon status --json 2>/dev/null)"; then
+  jq -r --arg env "${PASEO_RELAY_ENABLED:-unset}" '
+    "daemon   \(.localDaemon // "?"), \(.connectedDaemon // "?")\(if .daemonVersion then " \(.daemonVersion)" else "" end)",
+    "relay    \(if .relay == null then "unknown (PASEO_RELAY_ENABLED=\($env))"
+      elif .relay.enabled then "on (\(.relay.endpoint))" else "off" end)"' <<<"$status"
+else
+  echo "daemon   paseo daemon status failed"
+fi
+root="$(timeout 20 paseo daemon config get worktrees.root --json 2>/dev/null | jq -r '.value // empty')"
+expected="${WORKSPACE:-/workspace}/.worktrees"
+printf 'worktrees.root %s%s\n' "${root:-unset}" "$([ "$root" != "$expected" ] && echo " (expected $expected)")"
+
+section "sshd"
+if ss -ltn 2>/dev/null | grep -q ':22 '; then
+  echo "listening on 22 (SSHD=1)"
+else
+  echo "off (set SSHD=1 to enable)"
+fi

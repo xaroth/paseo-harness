@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Pairing info for a direct connection through the reverse proxy at PUBLIC_URL.
+# The apps' QR scanner and deep links only take relay offers, so the QR carries
+# PUBLIC_URL itself (opens the web UI) and the app is set up by hand.
+set -euo pipefail
+
+if [ "$(id -u)" = 0 ]; then
+  exec gosu code "$0" "$@"
+fi
+
+die() { printf 'pair: %s\n' "$*" >&2; exit 1; }
+
+url="${PUBLIC_URL:-}"
+[ -n "$url" ] || die "PUBLIC_URL is not set. Set it in .env to the https URL your reverse proxy serves, then recreate the container"
+
+case "$url" in
+  https://*) ssl=on; port=443 ;;
+  http://*) ssl=off; port=80 ;;
+  *) die "PUBLIC_URL must start with https:// or http:// (got $url)" ;;
+esac
+hostport="${url#*://}"
+hostport="${hostport%%/*}"
+hostport="${hostport##*@}"
+host="$hostport"
+if [[ "$hostport" =~ ^(.*):([0-9]+)$ ]]; then
+  host="${BASH_REMATCH[1]}"
+  port="${BASH_REMATCH[2]}"
+fi
+uri="tcp://$host:$port"
+[ "$ssl" = on ] && uri="$uri?ssl=true"
+
+cat <<EOF
+URL: $url
+
+In the Paseo app:
+  1. Settings, Add host, Direct connection
+  2. Host $host, Port $port, Use SSL $ssl
+     (or under Advanced, Connection URI $uri)
+  3. Password: the PASEO_PASSWORD from .env
+
+EOF
+if command -v qrencode >/dev/null; then
+  qrencode -t ANSIUTF8 "$url"
+else
+  echo "qrencode not found, no QR code"
+fi
