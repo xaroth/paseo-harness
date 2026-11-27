@@ -19,7 +19,7 @@ on:
         options: [none, patch, minor, major]
         default: none
       rebuild:
-        description: Pull the base image and refresh apt packages
+        description: Pull the base image and rebuild without cache
         type: boolean
         default: false
 
@@ -109,13 +109,10 @@ jobs:
             tags+=("$image:$next")
             echo "Release: $latest -> $next" >> "$GITHUB_STEP_SUMMARY"
           fi
-          # stable within an ISO week so normal builds keep the apt cache
-          epoch="$(date -u +%G-W%V)"
           {
             echo "image=$image"
             printf 'tags=%s\n' "$(IFS=,; echo "${tags[*]}")"
             echo "next=$next"
-            echo "epoch=$epoch"
           } >> "$GITHUB_OUTPUT"
           printf 'Tags: %s\n' "${tags[*]}" >> "$GITHUB_STEP_SUMMARY"
 
@@ -137,9 +134,8 @@ jobs:
           platforms: linux/amd64
           push: ${{ env.PUBLISH == 'true' }}
           pull: ${{ env.REBUILD == 'true' }}
+          no-cache: ${{ inputs.rebuild == true }}
           tags: ${{ steps.tags.outputs.tags }}
-          build-args: |
-            APT_EPOCH=${{ steps.tags.outputs.epoch }}
           cache-from: type=registry,ref=${{ steps.tags.outputs.image }}:buildcache
           cache-to: ${{ env.CAN_WRITE == 'true' && format('type=registry,ref={0}:buildcache,mode=max', steps.tags.outputs.image) || '' }}
 
