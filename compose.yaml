@@ -20,7 +20,7 @@ services:
       KEYRING: ${KEYRING:-0}
       UPDATE_CHANNEL: ${UPDATE_CHANNEL:-latest}
       UPDATE_TOOLS: ${UPDATE_TOOLS:-paseo,claude,playwright-mcp,chrome-devtools-mcp}
-      UPDATE_MIN_AGE: ${UPDATE_MIN_AGE:-24h}
+      UPDATE_MIN_AGE: ${UPDATE_MIN_AGE:-12h}
       UPDATE_INTERVAL: ${UPDATE_INTERVAL:-6h}
       UPDATE_TIMEOUT: ${UPDATE_TIMEOUT:-120}
       UPDATE_START_BUDGET: ${UPDATE_START_BUDGET:-180}

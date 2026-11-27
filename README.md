@@ -112,13 +112,13 @@ Paseo, Claude Code, Playwright MCP and Chrome DevTools MCP are installed in the 
 | --- | --- | --- |
 | `UPDATE_CHANNEL` | `latest` | `latest`: newest release older than `UPDATE_MIN_AGE`. `image`: image versions only. `pinned`: `PIN_*` versions, image versions for tools without a pin |
 | `UPDATE_TOOLS` | `paseo,claude,playwright-mcp,chrome-devtools-mcp` | tools kept up to date; others use the image version and ignore `PIN_*` |
-| `UPDATE_MIN_AGE` | `24h` | minimum release age; accepts `s`, `m`, `h`, `d` suffixes |
+| `UPDATE_MIN_AGE` | `12h` | minimum release age; accepts `s`, `m`, `h`, `d` suffixes |
 | `UPDATE_INTERVAL` | `6h` | how often to check while running; `0` checks at start only |
 | `UPDATE_TIMEOUT` | `120` | seconds per install |
 | `UPDATE_START_BUDGET` | `180` | total seconds the start-time update may take before the daemon boots |
 | `PIN_PASEO`, `PIN_CLAUDE`, `PIN_PLAYWRIGHT_MCP`, `PIN_CHROME_DEVTOOLS_MCP` | empty | exact version or npm tag for that tool; empty follows `UPDATE_CHANNEL` |
 
-An exact pin skips the minimum age and may be older than the image version. Otherwise a resolved version that is not newer than the image version uses the image.
+An exact pin skips the minimum age and may be older than the image version. To take an urgent fix sooner, set its `PIN_*` in `.env` and run `docker compose up -d`; clear the pin once the release is older than `UPDATE_MIN_AGE`. Otherwise a resolved version that is not newer than the image version uses the image.
 
 Commands, run with `docker compose exec paseo-harness <command>`:
 

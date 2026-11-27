@@ -75,7 +75,7 @@ dur_seconds() {
   esac
 }
 
-MIN_AGE="$(dur_seconds "${UPDATE_MIN_AGE:-24h}")" || { log "bad UPDATE_MIN_AGE '${UPDATE_MIN_AGE}'"; exit 2; }
+MIN_AGE="$(dur_seconds "${UPDATE_MIN_AGE:-12h}")" || { log "bad UPDATE_MIN_AGE '${UPDATE_MIN_AGE}'"; exit 2; }
 INTERVAL="$(dur_seconds "${UPDATE_INTERVAL:-6h}")" || { log "bad UPDATE_INTERVAL '${UPDATE_INTERVAL}'"; exit 2; }
 case "$CHANNEL" in latest|image|pinned) ;; *) log "bad UPDATE_CHANNEL '$CHANNEL' (latest|image|pinned)"; exit 2 ;; esac
 
@@ -314,7 +314,7 @@ update_tool() {
     cur=
   fi
   if ! ver="$(resolve "$tool" "$spec")" || [ -z "$ver" ]; then
-    record_error "$tool" "cannot resolve ${TOOL_PKG[$tool]}@$spec (min age ${UPDATE_MIN_AGE:-24h}), keeping ${cur:-image $img}"
+    record_error "$tool" "cannot resolve ${TOOL_PKG[$tool]}@$spec (min age ${UPDATE_MIN_AGE:-12h}), keeping ${cur:-image $img}"
     return 1
   fi
   if ! ((exact)) && skipped "$tool" "$ver"; then
@@ -394,7 +394,7 @@ cycle() {
 
 check() {
   local tool spec img cur prev ver err sel note
-  printf 'channel %s, min age %s\n' "$CHANNEL" "${UPDATE_MIN_AGE:-24h}"
+  printf 'channel %s, min age %s\n' "$CHANNEL" "${UPDATE_MIN_AGE:-12h}"
   sel=" $(selected_tools 2>/dev/null | tr '\n' ' ')"
   for tool in "${TOOLS[@]}"; do
     img="$(tool_version "$IMG" "$tool")"
